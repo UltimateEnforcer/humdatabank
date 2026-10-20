@@ -525,8 +525,11 @@ class EntityService:
                 return []
             else:
                 # Return all entities from all types
+                from app.utils.entity_groups import is_entity_group_enabled
                 all_entities = []
-                for model_class in EntityService.ENTITY_MODEL_MAP.values():
+                for type_key, model_class in EntityService.ENTITY_MODEL_MAP.items():
+                    if type_key == EntityType.initiative.value and not is_entity_group_enabled('funds'):
+                        continue
                     all_entities.extend(model_class.query.all())
                 return all_entities
 
