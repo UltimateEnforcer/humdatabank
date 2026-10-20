@@ -336,10 +336,7 @@ class Run:
             initiative = Initiative(reference=ref, title=p['title'])
             db.session.add(initiative)
         initiative.title = p['title']
-        initiative.fund_type = p['fund'] or 'CBF'
         initiative.national_society_id = ns_id
-        initiative.start_date = dt.date.fromisoformat(p['start_date']) if p['start_date'] else None
-        initiative.end_date = dt.date.fromisoformat(p['end_date']) if p['end_date'] else None
         initiative.is_active = active
         db.session.flush()
         proj = SimpleNamespace(reference=ref, initiative_id=initiative.id, active=active, p=p)

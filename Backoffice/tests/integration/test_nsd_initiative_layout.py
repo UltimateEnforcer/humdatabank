@@ -12,7 +12,7 @@ from tests.factories import create_test_country, create_test_template
 
 
 def _initiative(db_session, ref, **kwargs):
-    ini = Initiative(reference=ref, title=f"Project {ref}", fund_type="CBF", **kwargs)
+    ini = Initiative(reference=ref, title=f"Project {ref}", **kwargs)
     db_session.add(ini)
     db_session.flush()
     return ini
