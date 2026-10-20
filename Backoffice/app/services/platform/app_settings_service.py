@@ -132,7 +132,7 @@ def write_settings(settings: Dict, user_id: Optional[int] = None) -> bool:
         return False
 
 
-ALLOWED_ENTITY_TYPE_GROUPS = ['countries', 'ns_structure', 'secretariat']
+ALLOWED_ENTITY_TYPE_GROUPS = ['countries', 'ns_structure', 'secretariat', 'funds']
 
 try:
     from flask import has_request_context

@@ -12,6 +12,7 @@ from app.models import db
 from app.models.core import Country
 from app.models.organization import NationalSociety, NSBranch, NSSubBranch, NSLocalUnit, SecretariatDivision, SecretariatDepartment, SecretariatRegionalOffice, SecretariatClusterOffice
 from app.models.enums import EntityType
+from app.models.initiatives import Initiative
 
 
 class EntityService:
@@ -28,6 +29,7 @@ class EntityService:
         EntityType.department.value: SecretariatDepartment,
         EntityType.regional_office.value: SecretariatRegionalOffice,
         EntityType.cluster_office.value: SecretariatClusterOffice,
+        EntityType.initiative.value: Initiative,
     }
 
     # Group order for document modal <optgroup> (matches components/entity_dropdown.html + national_society).
@@ -473,6 +475,8 @@ class EntityService:
             return entity.branch.country if (hasattr(entity, 'branch') and entity.branch) else None
         if entity_type == EntityType.ns_localunit.value:
             return entity.branch.country if (hasattr(entity, 'branch') and entity.branch) else None
+        if entity_type == EntityType.initiative.value:
+            return entity.country
 
         if entity_type in [
             EntityType.division.value,
@@ -603,6 +607,7 @@ class EntityService:
             EntityType.department.value: "Secretariat Department",
             EntityType.regional_office.value: "Regional Office",
             EntityType.cluster_office.value: "Cluster Office",
+            EntityType.initiative.value: "Initiative",
         }
         return labels.get(entity_type, entity_type.replace('_', ' ').title())
 

@@ -27,6 +27,7 @@ from app.forms.shared import DeleteForm
 from app.forms.assignments import ReopenAssignmentForm, ApproveAssignmentForm
 from app.forms.auth_forms import RequestCountryAccessForm
 from flask_babel import _
+from app.utils.dashboard_focal_points import get_focal_point_users_for_initiative
 from app.utils.entity_groups import get_allowed_entity_type_codes, get_enabled_entity_groups
 from contextlib import suppress
 from app.utils.api_helpers import GENERIC_ERROR_MESSAGE, PAST_ASSIGNMENT_DAYS
@@ -879,7 +880,11 @@ def dashboard():
             )
 
             # NEW: Fetch and categorize focal points for the selected context (only if country is known)
-            if selected_country is not None:
+            if selected_entity_type == EntityType.initiative.value and selected_entity_id:
+                # A funded initiative is reported on by the people granted access to the initiative itself,
+                # not by the focal points of its country.
+                ns_focal_points, org_focal_points = get_focal_point_users_for_initiative(selected_entity_id)
+            elif selected_country is not None:
                 selected_country = (
                     Country.query.options(joinedload(Country.fds_member_user))
                     .filter_by(id=selected_country.id)

@@ -36,7 +36,7 @@ from app.utils.form_localization import get_localized_template_name
 from app.utils.constants import SELECTED_COUNTRY_ID_SESSION_KEY
 from app.services.organization.entity_service import EntityService
 from app.utils.api_helpers import json_response, api_error, PAST_ASSIGNMENT_DAYS, get_json_safe
-from app.utils.dashboard_focal_points import get_focal_points_for_country
+from app.utils.dashboard_focal_points import get_focal_points_for_country, get_focal_points_for_initiative
 from app.utils.request_validation import enforce_csrf_json
 from app.routes.main.helpers import DASHBOARD_EXCLUDED_ASSIGNMENT_ACTIVITY_TYPES
 from app.static_version import deploy_asset_version
@@ -985,7 +985,11 @@ def get_dashboard():
 
         ns_focal_points = []
         org_focal_points = []
-        if selected_entity:
+        if selected_entity and selected_entity['entity_type'] == EntityType.initiative.value:
+            ns_focal_points, org_focal_points = get_focal_points_for_initiative(
+                selected_entity['entity_id'],
+            )
+        elif selected_entity:
             entity_country = EntityService.get_country_for_entity(
                 selected_entity['entity_type'],
                 selected_entity['entity_id'],
