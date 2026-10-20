@@ -1,7 +1,8 @@
 """Apply a parsed NSD master workbook: project records, access, assignments and form data.
 
-Projects live under their country: every report is one assignment (reference in the period name) given to the
-country of the National Society. No core changes.
+Every project is an Initiative (core entity type). One assignment is one reporting period of one template ('Y1Q2' of
+the quarterly report, 'Final', 'Project' for the project record) and holds one row per project, each with its own due
+date and answers. The initiative belongs to the country of its National Society.
 
 analyze() reads only. run() writes, one project per transaction, so one bad project
 never blocks the others.
@@ -18,7 +19,8 @@ from sqlalchemy import func
 from app import db
 from app.models import (AssignedForm, AssignmentEntityStatus, Country, FormData, FormItem, FormSection, FormTemplate,
                         FormTemplateVersion, RepeatGroupData, RepeatGroupInstance, User)
-from app.models.enums import AssignmentEntityStatusValue
+from app.models.enums import AssignmentEntityStatusValue, EntityType
+from app.models.initiatives import Initiative
 from app.models.organization import NationalSociety
 from app.services.assignments.completion_service import AssignmentCompletionService
 from app.services.assignments.workflow_service import apply_entity_status_change
@@ -28,7 +30,7 @@ from . import restrictions
 from . import layout
 from .workbook import Book, logframe_structure
 
-ENTITY = 'country'
+ENTITY = EntityType.initiative.value
 
 # items the importer prefills in each report; they do not count as report history
 PREFILLED = {
@@ -137,12 +139,9 @@ def analyze(book: Book) -> dict:
     lk = Lookups()
     projects = book.rows['Projects']
     refs = [p['reference'] for p in projects]
-    profile_tpl = lk.templates.get('profile')
     existing = set()
-    if refs and profile_tpl:
-        names = {layout.period_name(r, layout.PROFILE_PERIOD): r for r in refs}
-        existing = {names[n] for (n,) in db.session.query(AssignedForm.period_name).filter(
-            AssignedForm.template_id == profile_tpl['tpl'].id, AssignedForm.period_name.in_(list(names))).all()}
+    if refs:
+        existing = {r for (r,) in db.session.query(Initiative.reference).filter(Initiative.reference.in_(refs)).all()}
     unmatched_ns = sorted({p['ns_name'] for p in projects if lk.match_ns(p['ns_name'], p['country_iso3']) is None})
     emails = {p[k].strip().casefold() for p in projects for k in ('ns_focal_email', 'ifrc_pm_email') if p.get(k)}
     unknown_emails = sorted(e for e in emails if e not in lk.user_ids)
@@ -163,7 +162,41 @@ def analyze(book: Book) -> dict:
         'schedule': dict(types),
         'quarterly': len(book.rows['Quarterly']),
         'final': len(book.rows['FinalCBF']),
+        'legacy_assignments': len(legacy_assignment_ids()),
     }
+
+
+# ------------------------------------------------------------ old layout (one assignment per project report)
+def legacy_assignment_ids() -> List[int]:
+    """Assignments of the NSD templates in the old layout: period '<reference> <Y1Q2|Final|Project>', given to a country.
+
+    The new layout has no space in the period ('Y1Q2'), so the two cannot be confused."""
+    tpl_ids = [t for (t,) in db.session.query(FormTemplateVersion.template_id)
+               .filter(FormTemplateVersion.name.in_(list(layout.TEMPLATE_NAMES.values()))).distinct().all()]
+    if not tpl_ids:
+        return []
+    return [i for (i,) in db.session.query(AssignedForm.id)
+            .filter(AssignedForm.template_id.in_(tpl_ids), AssignedForm.period_name.like('% %'),
+                    db.session.query(AssignmentEntityStatus.id)
+                    .filter(AssignmentEntityStatus.assigned_form_id == AssignedForm.id,
+                            AssignmentEntityStatus.entity_type == 'country').exists()).all()]
+
+
+def retire_legacy(progress: Callable[[int, int, str], None] = lambda *_: None) -> int:
+    """Delete the assignments of the old layout with their reports. Returns how many were deleted.
+
+    Run it after a master import with the new layout (the same workbook recreates every report)."""
+    from app.routes.admin.assignment_management import _delete_assignment_entity_status_with_children
+    ids = legacy_assignment_ids()
+    for n, af_id in enumerate(ids, 1):
+        af = db.session.get(AssignedForm, af_id)
+        name = af.period_name
+        for aes in AssignmentEntityStatus.query.filter_by(assigned_form_id=af_id).all():
+            _delete_assignment_entity_status_with_children(aes)
+        db.session.delete(af)
+        db.session.commit()
+        progress(n, len(ids), name)
+    return len(ids)
 
 
 # ----------------------------------------------------------------------- write
@@ -174,6 +207,7 @@ class Run:
         self.progress, self.cancelled = progress, cancelled
         self.lk = Lookups()
         self.stats = defaultdict(int)
+        self.assignments: Dict[tuple, AssignedForm] = {}
         self.roles = {}
         self.messages: List[str] = []
         self.logframes = defaultdict(list)
@@ -210,28 +244,35 @@ class Run:
         self.stats['values'] += 1
 
     def get_assignment(self, key: str, suffix: str, due: Optional[dt.datetime], proj: SimpleNamespace):
-        """One assignment per project and report (the reference is part of the period name), given to the country."""
+        """The project's row in the assignment of one reporting period ('Y1Q2', 'Final', 'Project'), with its own due date."""
         tpl = self.lk.templates[key]['tpl']
-        period = layout.period_name(proj.reference, suffix)
-        # The project record (profile) is never a task: it stays inactive, like the reports of closed projects.
-        active = proj.active and key != 'profile'
-        af = AssignedForm.query.filter_by(template_id=tpl.id, period_name=period).first()
-        if not af:
-            af = AssignedForm(template_id=tpl.id, period_name=period, is_active=active)
-            db.session.add(af)
-            db.session.flush()
-            self.stats['assignments_created'] += 1
-        elif af.is_active != active:
-            af.is_active = active
-        aes = AssignmentEntityStatus.query.filter_by(assigned_form_id=af.id, entity_type=ENTITY, entity_id=proj.country_id).first()
+        key_af = (tpl.id, suffix)
+        af = self.assignments.get(key_af)
+        if af is None:
+            af = AssignedForm.query.filter_by(template_id=tpl.id, period_name=suffix).first()
+            if not af:
+                # The project record (profile) is never a task: its assignment stays inactive.
+                af = AssignedForm(template_id=tpl.id, period_name=suffix, is_active=(key != 'profile'))
+                db.session.add(af)
+                db.session.flush()
+                self.stats['assignments_created'] += 1
+            self.assignments[key_af] = af
+        aes = AssignmentEntityStatus.query.filter_by(assigned_form_id=af.id, entity_type=ENTITY,
+                                                     entity_id=proj.initiative_id).first()
         if not aes:
-            aes = AssignmentEntityStatus(assigned_form_id=af.id, entity_type=ENTITY, entity_id=proj.country_id,
+            aes = AssignmentEntityStatus(assigned_form_id=af.id, entity_type=ENTITY, entity_id=proj.initiative_id,
                                          status=AssignmentEntityStatusValue.pending, due_date=due)
             db.session.add(aes)
             db.session.flush()
             self.stats['entities_created'] += 1
         elif due is not None:
             aes.due_date = due
+        # A closed project has no new work: untouched reports are cancelled (shown as past), and back to pending if it reopens.
+        if key != 'profile':
+            if not proj.active and aes.status == AssignmentEntityStatusValue.pending:
+                aes.status = AssignmentEntityStatusValue.cancelled
+            elif proj.active and aes.status == AssignmentEntityStatusValue.cancelled:
+                aes.status = AssignmentEntityStatusValue.pending
         return aes
 
     def has_history(self, aes, key: str) -> bool:
@@ -284,20 +325,30 @@ class Run:
     def import_project(self, p: dict):
         ref = p['reference']
         ns_id = self.lk.match_ns(p['ns_name'], p['country_iso3'])
-        country_id = self.lk.ns_country.get(ns_id) if ns_id else None
-        if country_id is None:
+        if ns_id is None or self.lk.ns_country.get(ns_id) is None:
             self.stats['skipped_no_national_society'] += 1
             self.note(f'{ref}: National Society "{p["ns_name"]}" not found, project skipped')
             return
-        proj = SimpleNamespace(reference=ref, country_id=country_id, active=(p['status'] or 'Open') in ('Open', 'Active'), p=p)
-        existed = AssignedForm.query.filter_by(template_id=self.lk.templates['profile']['tpl'].id,
-                                               period_name=layout.period_name(ref, layout.PROFILE_PERIOD)).first()
-        self.stats['projects_updated' if existed else 'projects_created'] += 1
+        active = (p['status'] or 'Open') in ('Open', 'Active')
+        initiative = Initiative.query.filter_by(reference=ref).first()
+        self.stats['projects_updated' if initiative else 'projects_created'] += 1
+        if initiative is None:
+            initiative = Initiative(reference=ref, title=p['title'])
+            db.session.add(initiative)
+        initiative.title = p['title']
+        initiative.fund_type = p['fund'] or 'CBF'
+        initiative.national_society_id = ns_id
+        initiative.start_date = dt.date.fromisoformat(p['start_date']) if p['start_date'] else None
+        initiative.end_date = dt.date.fromisoformat(p['end_date']) if p['end_date'] else None
+        initiative.is_active = active
+        db.session.flush()
+        proj = SimpleNamespace(reference=ref, initiative_id=initiative.id, active=active, p=p)
 
+        # The NS focal person and the IFRC project manager get access to this project (not to the whole country)
         for em in (p['ns_focal_email'], p['ifrc_pm_email']):
             uid = self.lk.user_ids.get((em or '').strip().casefold())
             if uid:
-                db.session.get(User, uid).add_entity_permission(ENTITY, country_id)
+                db.session.get(User, uid).add_entity_permission(ENTITY, initiative.id)
                 self.stats['access_grants'] += 1
 
         self.write_profile(proj)
@@ -476,8 +527,9 @@ def run(book: Book, user_id: int, overwrite_reports: bool, progress, cancelled) 
     r = Run(book, user_id, overwrite_reports, progress, cancelled)
     if r.lk.problems:
         return {'stats': {}, 'messages': r.lk.problems, 'failed': len(book.rows['Projects']), 'cancelled': False}
-    r.note('NSD assignments are not limited to an access group. Until "Who can access this assignment" is set, '
-           'anyone who can open that country can open them.')
+    r.note('NSD assignments are not limited to an access group. Until "Who can access this assignment" is set on each '
+           'NSD assignment (for example the Final report, for project managers only), everyone with access to a project '
+           'can open all of its reports.')
     projects = book.rows['Projects']
     failed = 0
     for i, p in enumerate(projects, 1):
@@ -491,6 +543,7 @@ def run(book: Book, user_id: int, overwrite_reports: bool, progress, cancelled) 
             return {'stats': dict(r.stats), 'messages': [str(exc)], 'failed': len(projects), 'cancelled': False}
         except Exception as exc:  # one project must not stop the others
             db.session.rollback()
+            r.assignments.clear()   # assignments created in the failed project no longer exist
             failed += 1
             r.note(f'{p["reference"]}: {type(exc).__name__}: {str(exc)[:200]}')
         progress(i, len(projects), p['reference'])
