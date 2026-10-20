@@ -607,7 +607,6 @@ class EntityService:
             EntityType.department.value: "Secretariat Department",
             EntityType.regional_office.value: "Regional Office",
             EntityType.cluster_office.value: "Cluster Office",
-            EntityType.initiative.value: "Initiative",
         }
         return labels.get(entity_type, entity_type.replace('_', ' ').title())
 

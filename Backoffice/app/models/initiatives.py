@@ -8,30 +8,19 @@ class Initiative(db.Model):
 
     It is an entity like a country or a branch: assignments hold one status row per initiative
     (AssignmentEntityStatus.entity_type = 'initiative'), each with its own due date and its own answers.
-    Details that belong to a specific fund (budget, contacts, logframe) live in the form data, not here.
+    Everything specific to a fund (budget, contacts, logframe, dates) lives in the form data, not here.
     """
     __tablename__ = 'initiative'
 
     id = db.Column(db.Integer, primary_key=True)
-    reference = db.Column(db.String(50), nullable=False, unique=True, index=True)
+    reference = db.Column(db.String(50), nullable=False, unique=True)
     title = db.Column(db.String(500), nullable=False)
-    fund_type = db.Column(db.String(20), nullable=True, index=True)
-
     national_society_id = db.Column(
-        db.Integer,
-        db.ForeignKey('national_societies.id', ondelete='SET NULL'),
-        nullable=True,
-        index=True,
-    )
-
-    start_date = db.Column(db.Date, nullable=True)
-    end_date = db.Column(db.Date, nullable=True)
-
+        db.Integer, db.ForeignKey('national_societies.id', ondelete='SET NULL'), nullable=True, index=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
-    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
-    national_society = db.relationship('NationalSociety', lazy='joined')
+    national_society = db.relationship('NationalSociety')
 
     @property
     def name(self):
