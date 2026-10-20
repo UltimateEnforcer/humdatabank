@@ -158,9 +158,15 @@
   });
   $('nsdi-legacy-ok').addEventListener('change', function () { $('nsdi-legacy-run').disabled = !this.checked; });
   $('nsdi-legacy-run').addEventListener('click', function () {
-    $('nsdi-legacy-run').disabled = true; $('nsdi-result').innerHTML = '';
+    $('nsdi-legacy-run').disabled = true; $('nsdi-result').textContent = '';
     post('/admin/nsd-import/retire-legacy', {}).then(function (j) {
-      if (!j.success) { $('nsdi-result').innerHTML = '<div class="nsdi-err">' + esc(j.message || j.error || 'Could not start.') + '</div>'; return; }
+      if (!j.success) {
+        var err = document.createElement('div');
+        err.className = 'nsdi-err';
+        err.textContent = j.message || j.error || 'Could not start.';
+        $('nsdi-result').appendChild(err);
+        return;
+      }
       jobId = j.job_id; show('nsdi-bar', true); poll();
     });
   });
