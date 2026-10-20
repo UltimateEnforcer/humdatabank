@@ -84,20 +84,42 @@ def test_old_per_project_assignments_are_found_and_deleted_but_the_new_ones_are_
     ini = _initiative(db_session, "CBF-T4-2401-001")
 
     old = AssignedForm(template_id=tpl.id, period_name="CBF-T4-2401-001 Y1Q1")
+    by_hand = AssignedForm(template_id=tpl.id, period_name="Autumn 2026")   # made by an admin, not by the importer
     new = AssignedForm(template_id=tpl.id, period_name="Y1Q1")
-    db_session.add_all([old, new])
+    db_session.add_all([old, by_hand, new])
     db_session.flush()
     db_session.add_all([
         AssignmentEntityStatus(assigned_form_id=old.id, entity_type="country", entity_id=country.id,
+                               status=AssignmentEntityStatusValue.pending),
+        AssignmentEntityStatus(assigned_form_id=by_hand.id, entity_type="country", entity_id=country.id,
                                status=AssignmentEntityStatusValue.pending),
         AssignmentEntityStatus(assigned_form_id=new.id, entity_type="initiative", entity_id=ini.id,
                                status=AssignmentEntityStatusValue.pending),
     ])
     db_session.commit()
-    old_id, new_id = old.id, new.id
+    old_id, new_id, by_hand_id = old.id, new.id, by_hand.id
 
     assert apply.legacy_assignment_ids() == [old_id]
     assert apply.retire_legacy() == 1
     assert db_session.get(AssignedForm, old_id) is None
     assert db_session.get(AssignedForm, new_id) is not None
+    assert db_session.get(AssignedForm, by_hand_id) is not None
     assert db_session.query(AssignmentEntityStatus).filter_by(assigned_form_id=new_id).count() == 1
+
+
+def test_old_assignments_are_never_deleted_before_the_new_layout_exists(db_session, app):
+    import pytest
+
+    tpl = create_test_template(db_session, name="NSD Quarterly report - CBF")
+    country = create_test_country(db_session)
+    old = AssignedForm(template_id=tpl.id, period_name="CBF-T5-2401-001 Y1Q1")
+    db_session.add(old)
+    db_session.flush()
+    db_session.add(AssignmentEntityStatus(assigned_form_id=old.id, entity_type="country", entity_id=country.id,
+                                          status=AssignmentEntityStatusValue.pending))
+    db_session.commit()
+    old_id = old.id
+
+    with pytest.raises(ValueError):
+        apply.retire_legacy()
+    assert db_session.get(AssignedForm, old_id) is not None

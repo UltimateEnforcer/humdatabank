@@ -132,10 +132,3 @@ TEMPLATE_NAMES = {
 PROFILE_PERIOD = 'Project'
 FINAL_PERIOD = 'Final'
 
-
-def legacy_period_name(reference: str, suffix: str) -> str:
-    """Period of the old layout, one assignment per project report, e.g. 'CBF-XX-2401-001 Y1Q2'.
-
-    Now one assignment holds one reporting period for all projects ('Y1Q2', 'Final', 'Project'), with one row per
-    initiative. The old names are only used to find the assignments to retire."""
-    return f'{reference} {suffix}'

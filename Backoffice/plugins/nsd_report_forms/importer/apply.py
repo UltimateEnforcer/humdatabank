@@ -31,6 +31,7 @@ from . import layout
 from .workbook import Book, logframe_structure
 
 ENTITY = EntityType.initiative.value
+_LEGACY_PERIOD = r'^\S+ (Y[0-9]+Q[0-9]+|Final|Project)$'   # '<reference> <period>' of the old layout
 
 # items the importer prefills in each report; they do not count as report history
 PREFILLED = {
@@ -170,13 +171,14 @@ def analyze(book: Book) -> dict:
 def legacy_assignment_ids() -> List[int]:
     """Assignments of the NSD templates in the old layout: period '<reference> <Y1Q2|Final|Project>', given to a country.
 
-    The new layout has no space in the period ('Y1Q2'), so the two cannot be confused."""
+    The new layout has no reference in the period ('Y1Q2'), and any other period an admin made by hand does not
+    fit the pattern, so neither is ever matched."""
     tpl_ids = [t for (t,) in db.session.query(FormTemplateVersion.template_id)
                .filter(FormTemplateVersion.name.in_(list(layout.TEMPLATE_NAMES.values()))).distinct().all()]
     if not tpl_ids:
         return []
     return [i for (i,) in db.session.query(AssignedForm.id)
-            .filter(AssignedForm.template_id.in_(tpl_ids), AssignedForm.period_name.like('% %'),
+            .filter(AssignedForm.template_id.in_(tpl_ids), AssignedForm.period_name.op('~')(_LEGACY_PERIOD),
                     db.session.query(AssignmentEntityStatus.id)
                     .filter(AssignmentEntityStatus.assigned_form_id == AssignedForm.id,
                             AssignmentEntityStatus.entity_type == 'country').exists()).all()]
@@ -187,6 +189,8 @@ def retire_legacy(progress: Callable[[int, int, str], None] = lambda *_: None) -
 
     Run it after a master import with the new layout (the same workbook recreates every report)."""
     from app.routes.admin.assignment_management import _delete_assignment_entity_status_with_children
+    if not db.session.query(AssignmentEntityStatus.id).filter_by(entity_type=ENTITY).first():
+        raise ValueError('Run the import first: there are no project reports in the new layout yet.')
     ids = legacy_assignment_ids()
     for n, af_id in enumerate(ids, 1):
         af = db.session.get(AssignedForm, af_id)
@@ -207,7 +211,7 @@ class Run:
         self.progress, self.cancelled = progress, cancelled
         self.lk = Lookups()
         self.stats = defaultdict(int)
-        self.assignments: Dict[tuple, AssignedForm] = {}
+        self.assignments: Dict[tuple, int] = {}   # (template id, period) -> assignment id
         self.roles = {}
         self.messages: List[str] = []
         self.logframes = defaultdict(list)
@@ -246,9 +250,8 @@ class Run:
     def get_assignment(self, key: str, suffix: str, due: Optional[dt.datetime], proj: SimpleNamespace):
         """The project's row in the assignment of one reporting period ('Y1Q2', 'Final', 'Project'), with its own due date."""
         tpl = self.lk.templates[key]['tpl']
-        key_af = (tpl.id, suffix)
-        af = self.assignments.get(key_af)
-        if af is None:
+        af_id = self.assignments.get((tpl.id, suffix))
+        if af_id is None:
             af = AssignedForm.query.filter_by(template_id=tpl.id, period_name=suffix).first()
             if not af:
                 # The project record (profile) is never a task: its assignment stays inactive.
@@ -256,11 +259,11 @@ class Run:
                 db.session.add(af)
                 db.session.flush()
                 self.stats['assignments_created'] += 1
-            self.assignments[key_af] = af
-        aes = AssignmentEntityStatus.query.filter_by(assigned_form_id=af.id, entity_type=ENTITY,
+            af_id = self.assignments[(tpl.id, suffix)] = af.id
+        aes = AssignmentEntityStatus.query.filter_by(assigned_form_id=af_id, entity_type=ENTITY,
                                                      entity_id=proj.initiative_id).first()
         if not aes:
-            aes = AssignmentEntityStatus(assigned_form_id=af.id, entity_type=ENTITY, entity_id=proj.initiative_id,
+            aes = AssignmentEntityStatus(assigned_form_id=af_id, entity_type=ENTITY, entity_id=proj.initiative_id,
                                          status=AssignmentEntityStatusValue.pending, due_date=due)
             db.session.add(aes)
             db.session.flush()
