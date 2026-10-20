@@ -9,7 +9,7 @@ from tests.factories import create_test_country
 
 
 def _initiative(db_session, ns=None):
-    ini = Initiative(reference="CBF-XX-2401-001", title="Digital readiness", fund_type="CBF",
+    ini = Initiative(reference="CBF-XX-2401-001", title="Digital readiness",
                      national_society_id=ns.id if ns else None)
     db_session.add(ini)
     db_session.commit()

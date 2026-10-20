@@ -25,28 +25,20 @@ def upgrade():
     op.create_table(
         "initiative",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("reference", sa.String(length=50), nullable=False),
+        sa.Column("reference", sa.String(length=50), nullable=False, unique=True),
         sa.Column("title", sa.String(length=500), nullable=False),
-        sa.Column("fund_type", sa.String(length=20), nullable=True),
         sa.Column(
             "national_society_id",
             sa.Integer(),
             sa.ForeignKey("national_societies.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("start_date", sa.Date(), nullable=True),
-        sa.Column("end_date", sa.Date(), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
-    op.create_index("ix_initiative_reference", "initiative", ["reference"], unique=True)
-    op.create_index("ix_initiative_fund_type", "initiative", ["fund_type"])
     op.create_index("ix_initiative_national_society_id", "initiative", ["national_society_id"])
 
 
 def downgrade():
     op.drop_index("ix_initiative_national_society_id", table_name="initiative")
-    op.drop_index("ix_initiative_fund_type", table_name="initiative")
-    op.drop_index("ix_initiative_reference", table_name="initiative")
     op.drop_table("initiative")
